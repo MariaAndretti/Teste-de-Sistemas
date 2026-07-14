@@ -1,15 +1,33 @@
-import express from 'express';
-import crypto from 'crypto';
+const express = require('express');
+const crypto = require('crypto');
 
 const app = express();
-const PORT = 3000;
+const PORT = 3001;
 
-app.use(express.json());
+app.use(express.json()); 
 
 const usuariosDB = [];
-const gerarTokenHash = (email) => {
+const favoritosDB = []; 
 
+const gerarTokenHash = (email) => {
     return crypto.createHash('sha256').update(email.toLowerCase().trim()).digest('hex');
+};
+
+const autenticarUsuario = (req, res, next) => {
+    const token = req.headers['authorization'];
+
+    if (!token) {
+        return res.status(401).json({ error: "Acesso negado. Token não fornecido." });
+    }
+
+    const usuarioLogado = usuariosDB.find(u => u.token === token);
+
+    if (!usuarioLogado) {
+        return res.status(401).json({ error: "Token inválido ou expirado." });
+    }
+
+    req.usuario = usuarioLogado;
+    next();
 };
 
 app.post('/cadastro', (req, res) => {
@@ -30,24 +48,12 @@ app.post('/cadastro', (req, res) => {
 
     const token = gerarTokenHash(email);
 
-    const novoUsuario = {
-        username,
-        email,
-        senha, 
-        pergunta_secreta,
-        resposta_secreta,
-        token
-    };
-
+    const novoUsuario = { username, email, senha, pergunta_secreta, resposta_secreta, token };
     usuariosDB.push(novoUsuario);
 
     return res.status(201).json({
         message: "Usuário cadastrado com sucesso!",
-        usuario: {
-            username: novoUsuario.username,
-            email: novoUsuario.email,
-            token: novoUsuario.token
-        }
+        usuario: { username, email, token }
     });
 });
 
@@ -58,28 +64,63 @@ app.post('/login', (req, res) => {
         return res.status(400).json({ error: "E-mail e senha são obrigatórios." });
     }
 
-    const usuario = usuariosDB.find(
-        u => u.email.toLowerCase() === email.toLowerCase() && u.senha === senha
-    );
+    const usuario = usuariosDB.find(u => u.email.toLowerCase() === email.toLowerCase() && u.senha === senha);
 
     if (!usuario) {
-        return res.status(401).json({ error: "Credenciais inválidas." });
+        return res.status(401).json({ error: "Email ou senha incorreto" });
     }
 
     return res.status(200).json({
         message: "Login efetuado com sucesso!",
-        autenticado: true,
-        user: {
-            username: usuario.username,
-            email: usuario.email
-        },
         token: usuario.token,
-        instrucao_localstorage: {
-            chave: "usuario_logado",
-            valor: usuario.token,
-            nota: "Salve este token no LocalStorage usando: localStorage.setItem('usuario_logado', token);"
-        }
+        chave_localstorage: "usuario_logado"
     });
+});
+
+app.post('/favoritos', autenticarUsuario, (req, res) => {
+    const { nomeSite, url } = req.body;
+
+    if (!nomeSite || !url) {
+        return res.status(400).json({ error: "Nome do site e endereço URL são obrigatórios." });
+    }
+
+    const novoFavorito = {
+        id: crypto.randomUUID(), 
+        usuarioEmail: req.usuario.email,
+        nomeSite,
+        url
+    };
+
+    favoritosDB.push(novoFavorito);
+
+    return res.status(201).json({
+        message: "Favorito salvo com sucesso!",
+        favorito: novoFavorito
+    });
+});
+
+app.get('/favoritos', autenticarUsuario, (req, res) => {
+    const meusFavoritos = favoritosDB.filter(f => f.usuarioEmail === req.usuario.email);
+    
+    return res.status(200).json(meusFavoritos);
+});
+
+app.delete('/favoritos/:id', autenticarUsuario, (req, res) => {
+    const { id } = req.params;
+
+    const indiceFavorito = favoritosDB.findIndex(f => f.id === id);
+
+    if (indiceFavorito === -1) {
+        return res.status(404).json({ error: "Favorito não encontrado." });
+    }
+
+    if (favoritosDB[indiceFavorito].usuarioEmail !== req.usuario.email) {
+        return res.status(403).json({ error: "Você não tem permissão para remover esse favorito" });
+    }
+
+    favoritosDB.splice(indiceFavorito, 1);
+
+    return res.status(200).json({ message: "Favorito removido com sucesso!" });
 });
 
 app.listen(3001, () => {
